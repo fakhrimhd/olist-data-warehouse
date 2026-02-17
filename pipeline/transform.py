@@ -1,109 +1,62 @@
 import luigi
+from pipeline.load import Load
 from pipeline.utils.db_conn import db_connection
 from pipeline.utils.read_sql import read_sql_file
 from sqlalchemy.orm import sessionmaker
-import os
-import warnings
 import sqlalchemy
+import os
 from dotenv import load_dotenv
+
 load_dotenv()
-warnings.filterwarnings('ignore')
+
+DIMS = ['dim_customer', 'dim_product', 'dim_seller']
+FACTS = ['fct_order', 'fct_order_items', 'fct_order_payments', 'fct_order_reviews']
 
 
 class Transform(luigi.Task):
+
+    def requires(self):
+        return Load()
+
     def run(self):
+        DIR_TRANSFORM_QUERY = os.getenv("DIR_TRANSFORM_QUERY")
+
+        # ── 1. Connect ───────────────────────────────────────────────────────
+        _, dwh_engine = db_connection()
+
+        Session = sessionmaker(bind=dwh_engine)
+
+        # ── 2. Build dimension tables ────────────────────────────────────────
+        session = Session()
         try:
-            # Establish connections to DWH
-            _, dwh_engine = db_connection()
-            
-            #------------------------------------------------PART OF TRANSFORM DIMENSIONS TABLE-----------------------------------------------
-            # Define DIR
-            DIR_TRANSFORM_QUERY = os.getenv("DIR_TRANSFORM_QUERY")
-
-            # Read transform query to final schema
-            dim_customer_query = read_sql_file(
-                file_path = f'{DIR_TRANSFORM_QUERY}/dim_customer.sql'
-            )
-
-            dim_product_query = read_sql_file(
-                file_path = f'{DIR_TRANSFORM_QUERY}/dim_product.sql'
-            )
-            
-            dim_seller_query = read_sql_file(
-                file_path = f'{DIR_TRANSFORM_QUERY}/dim_seller.sql'
-            )
-            
-
-            # Create session
-            Session = sessionmaker(bind = dwh_engine)
-            session = Session()
-            
-            # Transform to final.dim_customer
-            query = sqlalchemy.text(dim_customer_query)
-            session.execute(query)
-            
-            # Transform to final.dim_product
-            query = sqlalchemy.text(dim_product_query)
-            session.execute(query)
-
-            query = sqlalchemy.text(dim_seller_query)
-            session.execute(query)
-            
-            # Commit transaction
+            for table in DIMS:
+                query = read_sql_file(f'{DIR_TRANSFORM_QUERY}/{table}.sql')
+                session.execute(sqlalchemy.text(query))
             session.commit()
-            
-            # Close session
-            session.close()        
-            
-            #------------------------------------------------PART OF FACT TABLE-----------------------------------------------
-            
-            # Read query to insert into fact tables
-            fct_order_query = read_sql_file(
-                file_path = f'{DIR_TRANSFORM_QUERY}/fct_order.sql'
-            )
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
 
-            fct_order_items_query = read_sql_file(
-                file_path = f'{DIR_TRANSFORM_QUERY}/fct_order_items.sql'
-            )        
-            
-            fct_order_payments_query = read_sql_file(
-                file_path = f'{DIR_TRANSFORM_QUERY}/fct_order_payments.sql'
-            ) 
-
-            fct_order_reviews_query = read_sql_file(
-                file_path = f'{DIR_TRANSFORM_QUERY}/fct_order_reviews.sql'
-            ) 
-
-            # Create session
-            Session = sessionmaker(bind = dwh_engine)
-            session = Session()
-            
-            # Transform to final.fct_order
-            query = sqlalchemy.text(fct_order_query)
-            session.execute(query)
-
-            query = sqlalchemy.text(fct_order_items_query)
-            session.execute(query)        
-
-            query = sqlalchemy.text(fct_order_payments_query)
-            session.execute(query)
-
-            query = sqlalchemy.text(fct_order_reviews_query)
-            session.execute(query)
-
-            # Commit transaction
+        # ── 3. Build fact tables ─────────────────────────────────────────────
+        session = Session()
+        try:
+            for table in FACTS:
+                query = read_sql_file(f'{DIR_TRANSFORM_QUERY}/{table}.sql')
+                session.execute(sqlalchemy.text(query))
             session.commit()
-            
-            # Close session
-            session.close()  
-            
-        except Exception as e:
-            print(f"Error during data transformation: {e}")
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
 
-    def on_success(self):
-        # Create marker file upon successful execution
         with self.output().open('w') as f:
-            f.write('Transformation completed successfully.')
+            f.write('Transform completed.\n')
+
+    def output(self):
+        return luigi.LocalTarget(os.getenv("DIR_TEMP_DATA") + "/transform_done.txt")
 
 
 if __name__ == "__main__":
