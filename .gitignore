@@ -1,2 +1,17 @@
+# Environment
 .env
-/.venv
+.venv/
+
+# Temp pipeline files (generated at runtime)
+pipeline/temp/*.csv
+pipeline/temp/*.txt
+pipeline/temp/data/
+
+# Luigi runtime output
+luigi-output/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
