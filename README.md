@@ -1,102 +1,150 @@
 # 🏬 Olist Data Warehouse
 
-This repository contains a dimensional data warehouse design for **Olist**, along with its **Slowly Changing Dimension (SCD)** strategy. It also includes a modular **ELT pipeline** using Python and **Luigi** for orchestration.
+A dimensional data warehouse built on **Olist** — Brazil's largest e-commerce marketplace. This project covers the full ELT cycle: from raw transactional data in a source PostgreSQL database to a clean star schema ready for analytics, orchestrated with **Luigi**.
 
 ---
 
-## 📌 Project Overview
+## 🛠️ Tech Stack
 
-Olist is a major e-commerce marketplace in Brazil, connecting small businesses with customers across the country. As the business grows, so does the complexity of handling its transactional data. This repository showcases:
-
-- A dimensional model designed to support Olist's analytics needs
-- A clear SCD strategy to handle changes in dimension tables
-- A working ELT pipeline built with Python and Luigi
-
----
-
-## 📋 Requirements Gathering – SCD Strategy (Type 1)
-
-As part of the design process, we conducted a requirements gathering session (simulated) with stakeholders to understand how they want to handle changes in dimension attributes.
-
-Below are key questions and responses:
-
-### Q1: Should we track historical changes to product categories or attributes?
-**Answer:** "No, we only need current product details. Overwrite old values if changes occur."
-
-### Q2: Do seller details change and need history?
-**Answer:** "Seller locations rarely change. Just update current values."
-
-### Q3: Should we preserve old customer addresses?
-**Answer:** "No, only the latest location matters for logistics."
-
-### Q4: What about order status changes?
-**Answer:** "Track status changes in fact tables only."
+| Layer        | Tool                          |
+|--------------|-------------------------------|
+| Orchestration | Python + Luigi               |
+| Database     | PostgreSQL 16 (Docker)        |
+| Data Loading | SQLAlchemy + Pandas           |
+| SQL          | Raw `.sql` files per task     |
+| Environment  | Docker Compose + `.env`       |
 
 ---
 
-## 🧠 SCD Strategy Summary
+## 📐 Data Model
 
-Based on stakeholder feedback, we chose a **Type 1 SCD** strategy — overwrite old values without keeping historical versions.
+### Source (9 tables — `olist_src`)
+`orders` · `order_items` · `order_payments` · `order_reviews` · `products` · `sellers` · `customers` · `geolocation` · `product_category_name_translation`
 
-| Dimension         | SCD Type | Change Handling Description            |
-|------------------|----------|----------------------------------------|
-| `dim_product`     | Type 1   | Overwrite category and attributes      |
-| `dim_seller`      | Type 1   | Overwrite location information         |
-| `dim_customer`    | Type 1   | Overwrite address fields               |
-| `dim_order_status`| Type 1   | Overwrite status description           |
+### DWH — Star Schema (`olist_dwh.final`)
 
-### ✅ Why Type 1?
+**Dimensions**
+- `dim_customer` — customer ID, city, state
+- `dim_product` — product ID, category (EN), dimensions, weight
+- `dim_seller` — seller ID, city, state
 
-- **Aligned with business needs** – Stakeholders do not require historical tracking
-- **Simpler maintenance** – No versioning or date range logic
-- **More efficient** – Reduces storage use and ETL complexity
-- **Straightforward updates** – Clean `UPDATE` statements instead of inserts
+**Facts**
+- `fct_order` — order lifecycle: status, timestamps, delivery delta
+- `fct_order_items` — line items: price, freight, seller, product
+- `fct_order_payments` — payment type, installments, value
+- `fct_order_reviews` — review score, comment, response time
+
+### SCD Strategy: Type 1
+Stakeholders only need current values — no historical tracking required. All dimensions use **overwrite on change** (no versioning, no date ranges).
 
 ---
 
-## ⚙️ ELT Pipeline – Python & Luigi
+## 📂 Project Structure
 
-This project uses **Luigi** to orchestrate a modular ETL process implemented in Python and SQL.
+```
+dwh-olist/
+├── elt_main.py              # Entry point — runs Extract → Load → Transform
+├── docker-compose.yml       # Spins up olist-src (5433) + olist-dwh (5434)
+├── requirements.txt
+├── .env.example
+│
+├── pipeline/
+│   ├── extract.py           # Task 1: source DB → CSV
+│   ├── load.py              # Task 2: CSV → public schema → stg schema
+│   ├── transform.py         # Task 3: stg → final star schema
+│   ├── utils/
+│   │   ├── db_conn.py       # SQLAlchemy engine factory
+│   │   └── read_sql.py      # SQL file reader
+│   ├── sql/
+│   │   ├── extract/         # SELECT queries per source table
+│   │   ├── load/            # INSERT INTO stg.* queries
+│   │   └── transform/       # dim_* and fct_* build queries
+│   └── temp/                # Runtime CSVs + Luigi marker files (gitignored)
+│
+└── infra/
+    ├── source/              # Init SQL for source DB (9 tables + seed data)
+    └── dwh/                 # Init SQL for DWH (schema definitions)
+```
 
-### 📂 Pipeline Structure
+---
 
-| Script         | Purpose                                |
-|----------------|----------------------------------------|
-| `extract.py`   | Connects to source DB and extracts raw data |
-| `load.py`      | Loads raw data into staging/DWH tables |
-| `transform.py` | Applies transformations and loads final tables |
+## 🔄 Pipeline Flow
 
-### ▶️ How to Run
+```
+olist-src (port 5433)
+      │
+      ▼
+[Extract]  →  CSV files in pipeline/temp/
+      │
+      ▼
+[Load]     →  olist-dwh public schema → stg schema
+      │
+      ▼
+[Transform]→  olist-dwh final schema (star schema)
+```
 
-1. Clone the repository  
-2. Create a `.env` file with database connection info:
-   ```env
-   SRC_POSTGRES_DB=olist_src
-   SRC_POSTGRES_HOST=localhost
-   SRC_POSTGRES_USER=your_username
-   SRC_POSTGRES_PASSWORD=your_password
-   SRC_POSTGRES_PORT=5433
+Luigi handles task dependencies and idempotency via marker files — rerun by deleting `pipeline/temp/*.txt`.
 
-   DWH_POSTGRES_DB=olist_dwh
-   DWH_POSTGRES_HOST=localhost
-   DWH_POSTGRES_USER=your_username
-   DWH_POSTGRES_PASSWORD=your_password
-   DWH_POSTGRES_PORT=5434
-3. Start PostgreSQL services:
-    ```
-    docker-compose up -d
-    ```
-4. Set up your Python environment:
-    ```
-    python -m venv venv
-    source venv/bin/activate   # On Windows use venv\Scripts\activate
-    pip install -r requirements.txt
+**Incremental loading** is supported for fact tables. On first run, everything is extracted and loaded in full. On subsequent runs, only orders (and related payments, items, reviews) newer than the last watermark are extracted — the watermark is `MAX(order_purchase_timestamp)` read from `stg.orders`. Dimension tables (products, sellers, customers, etc.) are always full-refreshed since they're small and use Type 1 SCD.
 
-    ```
-5. Run Luigi tasks:
-    ```
-    luigi --module elt_main --local-scheduler
-    ```
+---
+
+## ▶️ How to Run
+
+**Prerequisites:** Docker, Python 3.10+
+
+### 1. Clone & configure
+
+```bash
+git clone https://github.com/fakhrimhd/dwh-olist.git
+cd dwh-olist
+cp .env.example .env
+# Edit .env with your paths and passwords
+```
+
+### 2. Start databases
+
+```bash
+docker-compose up -d
+```
+
+### 3. Set up Python environment
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 4. Run the pipeline
+
+```bash
+python3 elt_main.py
+```
+
+### 5. Query the results
+
+Connect to `olist-dwh` on port `5434`, schema `final`:
+
+```sql
+-- Example: top 10 product categories by revenue
+SELECT
+    p.product_category_name_english AS category,
+    COUNT(DISTINCT o.order_id)       AS total_orders,
+    ROUND(SUM(i.price)::numeric, 2)  AS total_revenue
+FROM final.fct_order_items i
+JOIN final.dim_product p ON i.product_id = p.product_id
+JOIN final.fct_order o   ON i.order_id = o.order_id
+WHERE o.order_status = 'delivered'
+GROUP BY category
+ORDER BY total_revenue DESC
+LIMIT 10;
+```
+
+---
 
 ## 📎 Notes
-This setup is for learning and prototyping. For production use, additional error handling and monitoring would be needed.
+
+- This project is built for learning and portfolio purposes.
+- For production use: add retry logic and alerting (e.g. Sentry/Slack on task failure).
+- Luigi marker files in `pipeline/temp/` control task idempotency — delete them to force a full re-run.
