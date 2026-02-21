@@ -1,4 +1,4 @@
-# 🏬 Olist Data Warehouse
+# Olist Data Warehouse
 
 A dimensional data warehouse built on **Olist** — Brazil's largest e-commerce marketplace. This project covers the full ELT cycle: from raw transactional data in a source PostgreSQL database to a clean star schema ready for analytics, orchestrated with **Luigi**.
 
@@ -16,7 +16,7 @@ A dimensional data warehouse built on **Olist** — Brazil's largest e-commerce 
 
 ---
 
-## 📐 Data Model
+## Data Model
 
 ### Source (9 tables — `olist_src`)
 `orders` · `order_items` · `order_payments` · `order_reviews` · `products` · `sellers` · `customers` · `geolocation` · `product_category_name_translation`
@@ -39,7 +39,7 @@ Stakeholders only need current values — no historical tracking required. All d
 
 ---
 
-## 📂 Project Structure
+## Project Structure
 
 ```
 dwh-olist/
@@ -68,7 +68,7 @@ dwh-olist/
 
 ---
 
-## 🔄 Pipeline Flow
+## Pipeline Flow
 
 ```
 olist-src (port 5433)
@@ -89,7 +89,7 @@ Luigi handles task dependencies and idempotency via marker files — rerun by de
 
 ---
 
-## ▶️ How to Run
+## How to Run
 
 **Prerequisites:** Docker, Python 3.10+
 
@@ -143,7 +143,7 @@ LIMIT 10;
 
 ---
 
-## 📎 Notes
+## Notes
 
 - This project is built for learning and portfolio purposes.
 - For production use: add retry logic and alerting (e.g. Sentry/Slack on task failure).
